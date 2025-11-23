@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AXIS-Z GPI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Montserrat', 'sans-serif'],
+            },
+            colors: {
+              'brand-bg-dark': '#1f2937',
+              'brand-bg-light': '#374151',
+              'brand-surface': '#4b5563',
+              'brand-primary': '#63b3ed',
+              'brand-text': '#edf2f7',
+              'brand-text-secondary': '#c1cbe0',
+              // Status Colors - UPDATED TAUPE PALETTE
+              'status-available': '#16a34a', // Green (Kept as requested)
+              'status-reserved': '#6B8CAC',  // Steel Blue (Desaturated/Lighter)
+              'status-sold': '#C07575',      // Muted Terracotta Red (Desaturated/Lighter)
+              'status-active': '#16a34a',
+              'status-inactive': '#9ca3af',
+              
+              // --- NUEVA PALETA TAUPÉ (Estética solicitada) ---
+              // ID Column Special
+              'navy-taupe': '#2A3B4C',
+              
+              // Taupe Variations for Groups (Main = Darker, Sub = Lighter)
+              // Grupo 1: Earthy Brown
+              'taupe-1-main': '#5D4E46', 
+              'taupe-1-sub': '#78655B',
+              // Grupo 2: Slate Gray
+              'taupe-2-main': '#4A5568',
+              'taupe-2-sub': '#606D82',
+              // Grupo 3: Muted Olive
+              'taupe-3-main': '#556B2F',
+              'taupe-3-sub': '#6B853E',
+              // Grupo 4: Warm Grey/Beige
+              'taupe-4-main': '#696969',
+              'taupe-4-sub': '#808080',
+              // Grupo 5: Muted Teal
+              'taupe-5-main': '#3B6E78',
+              'taupe-5-sub': '#4A8894',
+              // Grupo 6: Burgundy Taupe
+              'taupe-6-main': '#6D4C55',
+              'taupe-6-sub': '#8A606B',
+              // Grupo 7: Deep Blue Grey
+              'taupe-7-main': '#34495E',
+              'taupe-7-sub': '#455F7A',
+            },
+          }
+        }
+      }
+    </script>
+<script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "recharts": "https://aistudiocdn.com/recharts@^3.4.1",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.2/package/xlsx.mjs",
+    "@supabase/supabase-js": "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm",
+    "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+    "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js",
+    "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
+    "firebase/storage": "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js",
+    "firebase/": "https://aistudiocdn.com/firebase@^12.6.0/"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body class="bg-brand-bg-dark text-brand-text">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+</body>
+</html>
