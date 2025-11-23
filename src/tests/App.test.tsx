@@ -4,6 +4,6 @@ import App from '../App';
 describe('App', () => {
   it('should render the App', () => {
     render(<App />);
-    expect(screen.getByText('Hello, World!')).toBeInTheDocument();
+    expect(screen.getByText('AXIS-Z GPI')).toBeInTheDocument();
   });
 });

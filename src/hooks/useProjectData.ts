@@ -1,6 +1,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabaseClient';
+import { db } from '../lib/firebaseClient'; 
+import { collection, getDocs, getDoc, writeBatch, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import type { Project, ProjectDataRaw, Unit, Client, Garage, Storage } from '../types';
 import { Status } from '../types';
 import { fuzzyFindValue } from '../utils';
@@ -180,72 +181,44 @@ export const useProjectData = (isOfflineMode: boolean) => {
   const [availableProjects, setAvailableProjects] = useState<string[]>([]);
   const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
   
-  const [projectRaw, setProjectRaw] = useState<ProjectDataRaw>({
-      proyecto_nombre: '', ds_generales: {}, ts_general: [], garajes: [], trasteros: []
-  });
+  const [projectRaw, setProjectRaw] = useState<ProjectDataRaw>({ proyecto_nombre: '', ds_generales: {}, ts_general: [], garajes: [], trasteros: [] });
   const [project, setProject] = useState<Project | null>(null);
   const [clients, setClients] = useState<Client[]>([]);
 
-  // --- AUTOMATIC CLIENT BOOTSTRAPPING & SYNC ---
+  // --- CLIENTS ---
   useEffect(() => {
       const fetchAndBootstrapClients = async () => {
-          // 1. Modo Offline: Usar muestra local siempre
-          if (isOfflineMode) {
+          if (isOfflineMode || !db) {
               if (clients.length === 0) setClients(SAMPLE_CLIENTS);
               return;
           }
 
           try {
-              // 2. Modo Online: Consultar Supabase
-              const { data, error, count } = await supabase.from('clients').select('*', { count: 'exact' });
-              
-              // Error crítico o tabla inexistente
-              if (error) {
-                  console.warn("Error accediendo a 'clients':", error.message);
-                  if (clients.length === 0) setClients(SAMPLE_CLIENTS); 
-                  return;
-              }
+              const clientsCollection = collection(db, 'clients');
+              const querySnapshot = await getDocs(clientsCollection);
 
-              // 3. BOOTSTRAP: Si la tabla está vacía, inyectar datos de muestra automáticamente
-              if (data && data.length === 0) {
-                  console.log("Base de datos vacía. Ejecutando bootstrap automático de clientes...");
-                  const mappedSampleClients = SAMPLE_CLIENTS.map(c => ({
-                    id: c.id, name: c.name, last_name: c.lastName, email: c.email,
-                    phone: c.phone, phone2: c.phone2, dni: c.dni, address: c.address,
-                    postal_code: c.postalCode, city: c.city, province: c.province, country: c.country,
-                    status: c.status, client_type: c.clientType, "group": c.group,
-                    birth_date: c.birthDate, civil_status: c.civilStatus, gender: c.gender,
-                    registration_date: c.registrationDate, notes: c.notes
-                  }));
-                  
-                  const { error: insertError } = await supabase.from('clients').insert(mappedSampleClients);
-                  if (!insertError) {
-                      setClients(SAMPLE_CLIENTS); // Usar muestra local tras insertar
-                  } else {
-                      console.error("Error en bootstrap:", insertError);
-                  }
-              } else if (data) {
-                  // 4. Datos existentes: Cargar normal
-                  const mappedClients: Client[] = data.map((c: any) => ({
-                      ...c,
-                      phone: c.phone || '',
-                      status: c.status || 'ACTIVO',
-                      clientType: c.client_type || c.clientType || 'Interesado',
-                      lastName: c.last_name || c.lastName,
-                      postalCode: c.postal_code || c.postalCode,
-                      birthDate: c.birth_date || c.birthDate,
-                      civilStatus: c.civil_status || c.civilStatus,
-                      registrationDate: c.registration_date || c.registrationDate || new Date().toISOString(),
-                  }));
+              if (querySnapshot.empty) {
+                  console.log("Base de datos de clientes vacía. Ejecutando bootstrap automático...");
+                  const batch = writeBatch(db);
+                  SAMPLE_CLIENTS.forEach(client => {
+                      const docRef = doc(db, 'clients', client.id);
+                      batch.set(docRef, client);
+                  });
+                  await batch.commit();
+                  setClients(SAMPLE_CLIENTS);
+                  console.log("Bootstrap de clientes completado.");
+              } else {
+                  const mappedClients: Client[] = querySnapshot.docs.map(doc => ({ ...(doc.data() as Client) }));
                   setClients(mappedClients);
               }
           } catch (err) {
-              console.error("Error general en fetchClients:", err);
+              console.error("Error en fetchClients (Firebase):", err);
+              registrarError('useProjectData', 'FIREBASE', 'fetchClients', (err as Error).message);
               if (clients.length === 0) setClients(SAMPLE_CLIENTS);
           }
       };
       fetchAndBootstrapClients();
-  }, [isOfflineMode]);
+  }, [isOfflineMode, clients.length]);
 
   const handleSaveClient = async (client: Client) => {
       setClients(prev => {
@@ -253,56 +226,78 @@ export const useProjectData = (isOfflineMode: boolean) => {
           if (idx >= 0) { const newArr = [...prev]; newArr[idx] = client; return newArr; }
           return [...prev, client];
       });
-      if (isOfflineMode) return;
-      const dbClient = {
-          id: client.id, name: client.name, last_name: client.lastName, email: client.email,
-          phone: client.phone, phone2: client.phone2, dni: client.dni, address: client.address,
-          postal_code: client.postalCode, city: client.city, province: client.province, country: client.country,
-          status: client.status, client_type: client.clientType, "group": client.group,
-          birth_date: client.birthDate, civil_status: client.civilStatus, gender: client.gender,
-          registration_date: client.registrationDate, notes: client.notes
-      };
-      try { await supabase.from('clients').upsert(dbClient); } catch (e) { console.error(e); }
+
+      if (isOfflineMode || !db) return;
+
+      try {
+          const clientRef = doc(db, 'clients', client.id);
+          await setDoc(clientRef, client, { merge: true });
+      } catch (e) { 
+          console.error("Error guardando cliente (Firebase):", e);
+          registrarError('useProjectData', 'FIREBASE', 'saveClient', (e as Error).message);
+      }
   };
 
   const handleBulkClientUpdate = async (clientIds: Set<string>, updates: Partial<Client>) => {
       const updatedLocalClients = clients.map(c => clientIds.has(c.id) ? { ...c, ...updates } : c);
       setClients(updatedLocalClients);
-      if (isOfflineMode) return;
-      const dbUpdates: any = {};
-      if (updates.status) dbUpdates.status = updates.status;
-      if (updates.clientType) dbUpdates.client_type = updates.clientType;
-      if (updates.group) dbUpdates["group"] = updates.group;
-      if (Object.keys(dbUpdates).length > 0) {
-          try { await supabase.from('clients').update(dbUpdates).in('id', Array.from(clientIds)); } catch (e) { console.error(e); }
+
+      if (isOfflineMode || !db) return;
+      
+      try {
+          const batch = writeBatch(db);
+          clientIds.forEach(id => {
+              const docRef = doc(db, 'clients', id);
+              batch.update(docRef, updates);
+          });
+          await batch.commit();
+      } catch (e) { 
+          console.error("Error en actualización masiva de clientes (Firebase):", e); 
+          registrarError('useProjectData', 'FIREBASE', 'bulkUpdateClients', (e as Error).message);
       }
   };
 
   // --- PROJECTS ---
   const loadProjectList = useCallback(async () => {
-      if (isOfflineMode) return;
+      if (isOfflineMode || !db) return;
       try {
-          const { data, error } = await supabase.from('datos_proyecto').select('proyecto_nombre');
-          if (error) { if (error.code === '42P01') return; throw error; }
-          if (data) { setAvailableProjects(Array.from(new Set(data.map((d: any) => d.proyecto_nombre)))); }
-      } catch (err) { console.error("Error cargando lista de proyectos:", err); }
+          const projectsCollection = collection(db, 'projects');
+          const projectSnapshot = await getDocs(projectsCollection);
+          const projectNames = projectSnapshot.docs.map(doc => doc.id);
+          setAvailableProjects(projectNames);
+      } catch (err) {
+          console.error("Error cargando lista de proyectos (Firebase):", err);
+          registrarError('useProjectData', 'FIREBASE', 'loadProjectList', (err as Error).message);
+      }
   }, [isOfflineMode]);
 
   useEffect(() => { loadProjectList(); }, [loadProjectList]);
 
   const loadProjectData = async (projectName: string) => {
       setIsLoading(true);
+      if (!db) {
+          alert("Error: Firebase no está configurado. No se puede cargar el proyecto.");
+          setIsLoading(false);
+          return;
+      }
       try {
-          const { data, error } = await supabase.from('datos_proyecto').select('tabla_id, datos').eq('proyecto_nombre', projectName);
-          if (error) throw error;
+          const projectRef = doc(db, 'projects', projectName);
+          const docSnap = await getDoc(projectRef);
+
+          if (!docSnap.exists()) {
+              throw new Error(`El proyecto '${projectName}' no existe en Firebase.`);
+          }
+          
+          const data = docSnap.data();
 
           const rawData: ProjectDataRaw = {
               proyecto_nombre: projectName,
-              ds_generales: data.find(d => d.tabla_id === 'ds_generales')?.datos || {},
-              ts_general: data.find(d => d.tabla_id === 'ts_general')?.datos || [],
-              garajes: data.find(d => d.tabla_id === 'garajes')?.datos || [],
-              trasteros: data.find(d => d.tabla_id === 'trasteros')?.datos || []
+              ds_generales: data.ds_generales || {},
+              ts_general: data.ts_general || [],
+              garajes: data.garajes || [],
+              trasteros: data.trasteros || []
           };
+
           setProjectRaw(rawData);
           setProject({
               id: projectName, name: projectName, raw: rawData,
@@ -311,27 +306,40 @@ export const useProjectData = (isOfflineMode: boolean) => {
               storages: mapStorages(rawData.trasteros)
           });
           setSelectedProjectName(projectName);
-      } catch (err) { console.error("Error cargando datos del proyecto:", err); alert("Error al cargar el proyecto."); } finally { setIsLoading(false); }
+      } catch (err) { 
+          console.error("Error cargando datos del proyecto (Firebase):", err);
+          registrarError('useProjectData', 'FIREBASE', 'loadProjectData', (err as Error).message);
+          alert("Error al cargar el proyecto."); 
+      } finally { 
+          setIsLoading(false); 
+      }
   };
 
   const handleDeleteProject = async (name: string) => {
-      if(!window.confirm(`¿Eliminar ${name}?`)) return;
+      if(!window.confirm(`¿Seguro que quieres eliminar el proyecto '${name}'? Esta acción es irreversible.`)) return;
+      if (!db) return;
       try {
-          await supabase.from('datos_proyecto').delete().eq('proyecto_nombre', name);
-          await supabase.from('user_project_settings').delete().eq('project_name', name);
+          await deleteDoc(doc(db, 'projects', name));
+          
+          // TODO: Eliminar subcolecciones como 'settings' si se implementan.
+
           setAvailableProjects(prev => prev.filter(p => p !== name));
           if (selectedProjectName === name) {
-              setSelectedProjectName(null); setProject(null);
+              setSelectedProjectName(null); 
+              setProject(null);
               setProjectRaw({ proyecto_nombre: '', ds_generales: {}, ts_general: [], garajes: [], trasteros: [] });
           }
-      } catch (err) { console.error(err); }
+      } catch (err) { 
+          console.error("Error eliminando el proyecto (Firebase):", err);
+          registrarError('useProjectData', 'FIREBASE', 'deleteProject', (err as Error).message);
+      }
   };
 
-  // --- UNIT UPDATES ---
+  // --- UNIT & SERVICE UPDATES (Write-Back) ---
   const persistUnitChanges = async (updatedUnits: Unit[]) => {
       if (!selectedProjectName || !projectRaw.ts_general) return;
-      const newTsGeneral = [...projectRaw.ts_general];
       
+      let newTsGeneral = [...projectRaw.ts_general];
       updatedUnits.forEach(u => {
           const rowIndex = newTsGeneral.findIndex(row => {
               const rowId = fuzzyFindValue(row, ['_VIVIENDAS', 'ID', 'VIVIENDA', 'CODIGO', 'REF']);
@@ -341,11 +349,54 @@ export const useProjectData = (isOfflineMode: boolean) => {
               newTsGeneral[rowIndex] = applyChangesToRawRow(newTsGeneral[rowIndex], u);
           }
       });
-      const newRawData = { ...projectRaw, ts_general: newTsGeneral };
-      setProjectRaw(newRawData);
 
-      if (!isOfflineMode) {
-          await supabase.from('datos_proyecto').update({ datos: newTsGeneral }).eq('proyecto_nombre', selectedProjectName).eq('tabla_id', 'ts_general');
+      setProjectRaw(prev => ({ ...prev, ts_general: newTsGeneral }));
+
+      if (!isOfflineMode && db) {
+          try {
+              const projectRef = doc(db, 'projects', selectedProjectName);
+              await updateDoc(projectRef, { ts_general: newTsGeneral });
+          } catch (e) {
+              console.error("Error persistiendo cambios de unidades (Firebase):", e);
+              registrarError('useProjectData', 'FIREBASE', 'persistUnitChanges', (e as Error).message);
+          }
+      }
+  };
+  
+  const handleServiceUpdate = async (type: 'garage' | 'storage', updatedItem: Garage | Storage) => {
+      if (!project || !selectedProjectName) return;
+      const listKey = type === 'garage' ? 'garages' : 'storages';
+      const rawListKey = type === 'garage' ? 'garajes' : 'trasteros';
+      
+      const currentItems = project[listKey] as any[];
+      const newItems = currentItems.map(item => item.id === updatedItem.id ? updatedItem : item);
+      setProject({ ...project, [listKey]: newItems });
+      
+      if (!projectRaw[rawListKey]) return;
+      let newRawList = [...projectRaw[rawListKey]];
+      const rowIndex = newRawList.findIndex(r => {
+          const id = fuzzyFindValue(r, type === 'garage' ? ['ID-G', 'GARAJE'] : ['ID-T', 'TRASTERO']) || 'UNK';
+          return String(id) === updatedItem.id;
+      });
+
+      if (rowIndex !== -1) {
+          const row = { ...newRawList[rowIndex] };
+          if (updatedItem.status) row['ESTADO'] = updatedItem.status === Status.Reserved ? 'RESERVADA' : (updatedItem.status === Status.Sold ? 'VENDIDA' : 'DISPONIBLE');
+          if (updatedItem.price !== undefined) row[type === 'garage' ? 'PRECIO MÁX-G' : 'PRECIO MÁX-T'] = updatedItem.price;
+          if (updatedItem.notes !== undefined) row['OBSERVACIONES'] = updatedItem.notes;
+          
+          newRawList[rowIndex] = row;
+          setProjectRaw(prev => ({ ...prev, [rawListKey]: newRawList }));
+          
+          if (!isOfflineMode && db) {
+              try {
+                  const projectRef = doc(db, 'projects', selectedProjectName);
+                  await updateDoc(projectRef, { [rawListKey]: newRawList });
+              } catch (e) {
+                  console.error(`Error persistiendo cambios de ${type} (Firebase):`, e);
+                  registrarError('useProjectData', 'FIREBASE', `persist${type}Changes`, (e as Error).message);
+              }
+          }
       }
   };
 
@@ -369,37 +420,6 @@ export const useProjectData = (isOfflineMode: boolean) => {
       });
       setProject({ ...project, units: newUnits });
       await persistUnitChanges(changedUnits);
-  };
-  
-  const handleServiceUpdate = async (type: 'garage' | 'storage', updatedItem: Garage | Storage) => {
-      if (!project || !selectedProjectName) return;
-      const listKey = type === 'garage' ? 'garages' : 'storages';
-      const rawListKey = type === 'garage' ? 'garajes' : 'trasteros';
-      
-      const currentItems = project[listKey] as any[];
-      const newItems = currentItems.map(item => item.id === updatedItem.id ? updatedItem : item);
-      setProject({ ...project, [listKey]: newItems });
-      
-      if (!projectRaw[rawListKey]) return;
-      const newRawList = [...projectRaw[rawListKey]];
-      const rowIndex = newRawList.findIndex(r => {
-          const id = fuzzyFindValue(r, type === 'garage' ? ['ID-G', 'GARAJE'] : ['ID-T', 'TRASTERO']) || 'UNK';
-          return String(id) === updatedItem.id;
-      });
-      if (rowIndex !== -1) {
-          const row = { ...newRawList[rowIndex] };
-           // Mapeo inverso simplificado
-          if (updatedItem.status) row['ESTADO'] = updatedItem.status === Status.Reserved ? 'RESERVADA' : (updatedItem.status === Status.Sold ? 'VENDIDA' : 'DISPONIBLE');
-          if (updatedItem.price !== undefined) row['PRECIO'] = updatedItem.price;
-          if (updatedItem.notes !== undefined) row['OBSERVACIONES'] = updatedItem.notes;
-          
-          newRawList[rowIndex] = row;
-          setProjectRaw(prev => ({ ...prev, [rawListKey]: newRawList }));
-          
-          if (!isOfflineMode) {
-              await supabase.from('datos_proyecto').update({ datos: newRawList }).eq('proyecto_nombre', selectedProjectName).eq('tabla_id', rawListKey);
-          }
-      }
   };
 
   return {

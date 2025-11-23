@@ -1,7 +1,8 @@
 
 import React, { useState } from 'react';
 import { DocumentChartBarIcon, PlusIcon, TrashIcon, ArrowPathIcon } from './icons/Icons';
-import { supabase } from '../lib/supabaseClient';
+import { db } from '../lib/firebaseClient';
+import { doc, setDoc } from 'firebase/firestore';
 import Modal from './ui/Modal';
 
 interface ProjectHeaderProps {
@@ -30,17 +31,21 @@ const SyncModal = ({ onClose, onSync, existingProjectName }: { onClose: () => vo
 
     const handleSubmit = async () => {
         if (!projectName.trim()) return alert("El nombre del proyecto es obligatorio");
-        // Validación mínima: se requiere al menos el TS_GENERAL y DS_GENERALES para que la app tenga sentido
         if (!files.ds_generales && !files.ts_general && !files.garajes && !files.trasteros) {
              return alert("Debes seleccionar al menos un archivo para actualizar.");
         }
 
+        if (!db) {
+            alert("Error: La base de datos (Firebase) no está configurada. No se puede sincronizar.");
+            return;
+        }
+
         setIsUploading(true);
         try {
-            const readFile = (file: File | null, isArray: boolean) => {
-                return new Promise<any>((resolve) => {
+            const readFile = (file: File | null): Promise<any> => {
+                return new Promise((resolve, reject) => {
                     if (!file) {
-                        resolve(null); // Return null if no file update
+                        resolve(null);
                         return;
                     }
                     const reader = new FileReader();
@@ -49,38 +54,42 @@ const SyncModal = ({ onClose, onSync, existingProjectName }: { onClose: () => vo
                             const json = JSON.parse(e.target?.result as string);
                             resolve(json);
                         } catch (err) {
-                            console.error("Error parseando JSON", file?.name, err);
-                            resolve(isArray ? [] : {}); // Fallback safe
+                            console.error("Error parseando JSON en", file?.name, err);
+                            alert(`Error de formato en el archivo ${file.name}. Asegúrate de que es un JSON válido.`);
+                            reject(err);
                         }
                     };
+                    reader.onerror = (e) => {
+                        console.error("Error leyendo el archivo:", e);
+                        reject(new Error(`No se pudo leer el archivo ${file.name}`));
+                    }
                     reader.readAsText(file);
                 });
             };
 
             const [dsData, tsData, gData, tData] = await Promise.all([
-                readFile(files.ds_generales, false),
-                readFile(files.ts_general, true),
-                readFile(files.garajes, true),
-                readFile(files.trasteros, true)
+                readFile(files.ds_generales),
+                readFile(files.ts_general),
+                readFile(files.garajes),
+                readFile(files.trasteros)
             ]);
 
-            // Construir payload SOLO con lo que se ha subido
-            const payload = [];
-            if (dsData) payload.push({ proyecto_nombre: projectName, tabla_id: 'ds_generales', datos: dsData });
-            if (tsData) payload.push({ proyecto_nombre: projectName, tabla_id: 'ts_general', datos: tsData });
-            if (gData) payload.push({ proyecto_nombre: projectName, tabla_id: 'garajes', datos: gData });
-            if (tData) payload.push({ proyecto_nombre: projectName, tabla_id: 'trasteros', datos: tData });
+            const projectData: any = {};
+            if (dsData) projectData.ds_generales = dsData;
+            if (tsData) projectData.ts_general = tsData;
+            if (gData) projectData.garajes = gData;
+            if (tData) projectData.trasteros = tData;
 
-            if (payload.length > 0) {
-                const { error } = await supabase.from('datos_proyecto').upsert(payload);
-                if (error) throw error;
+            if (Object.keys(projectData).length > 0) {
+                const projectRef = doc(db, 'projects', projectName);
+                await setDoc(projectRef, projectData, { merge: true }); // Upsert
             }
 
             onSync(projectName);
             onClose();
 
         } catch (error: any) {
-            console.error("Error syncing:", error);
+            console.error("Error syncing con Firebase:", error);
             alert("Error sincronizando proyecto: " + (error.message || JSON.stringify(error)));
         } finally {
             setIsUploading(false);
@@ -98,7 +107,7 @@ const SyncModal = ({ onClose, onSync, existingProjectName }: { onClose: () => vo
                         value={projectName}
                         onChange={e => setProjectName(e.target.value)}
                         placeholder="Ej: Residencial Zénit"
-                        disabled={!!existingProjectName} // No permitir cambiar nombre al actualizar
+                        disabled={!!existingProjectName}
                     />
                 </div>
                 <div className="grid grid-cols-1 gap-4">

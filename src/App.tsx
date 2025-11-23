@@ -9,11 +9,12 @@ import GeneralDataView from './components/views/GeneralDataView';
 import GaragesView from './components/views/GaragesView';
 import StoragesView from './components/views/StoragesView';
 import FinancialView from './components/views/FinancialView';
-import ProgrammerView from './components/views/ProgrammerView'; // Importar Nueva Vista
+import ProgrammerView from './components/views/ProgrammerView';
 import ProjectHeader from './components/ProjectHeader';
 import type { FiltersState, AugmentedClient } from './types';
 import { calculateAge, getAgeRange } from './utils';
-import { supabase } from './lib/supabaseClient';
+import { db } from './lib/firebaseClient';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { useProjectData } from './hooks/useProjectData';
 
 const initialFilters: FiltersState = {
@@ -21,7 +22,6 @@ const initialFilters: FiltersState = {
 };
 
 export default function App() {
-  // --- PERSISTENCIA ESTADO INICIAL ---
   const savedView = localStorage.getItem('lastView');
   const savedProject = localStorage.getItem('lastProject');
 
@@ -50,17 +50,14 @@ export default function App() {
   const [filters, setFilters] = useState<FiltersState>(initialFilters);
   const [visibleGroups, setVisibleGroups] = useState<Record<string, boolean>>({});
 
-  // --- EFECTO PARA CARGAR PROYECTO GUARDADO ---
   useEffect(() => {
       if (availableProjects.length > 0 && savedProject && !selectedProjectName) {
-          // Verificar si el proyecto guardado aun existe
           if (availableProjects.includes(savedProject)) {
               handleSelectProject(savedProject);
           }
       }
-  }, [availableProjects, savedProject, selectedProjectName]); // Solo cuando carga la lista o cambia el guardado
+  }, [availableProjects, savedProject, selectedProjectName, handleSelectProject]);
 
-  // --- EFECTO PARA GUARDAR ESTADO ---
   useEffect(() => {
       localStorage.setItem('lastView', currentView);
   }, [currentView]);
@@ -71,25 +68,45 @@ export default function App() {
       }
   }, [selectedProjectName]);
 
-
-  // --- SETTINGS PERSISTENCE (Keep minimal logic here for UI prefs) ---
+  // --- SETTINGS PERSISTENCE (FIREBASE) ---
   useEffect(() => {
       const loadSettings = async () => {
-          if (!selectedProjectName || isOfflineMode) return;
+          if (!selectedProjectName || isOfflineMode || !db) { // DB CHECK ADDED
+              setFilters(initialFilters);
+              setVisibleGroups({});
+              return;
+          }
           try {
-              const { data: filterData } = await supabase.from('user_project_settings').select('setting_value').eq('project_name', selectedProjectName).eq('setting_type', 'filters').single();
-              if (filterData) setFilters(filterData.setting_value); else setFilters(initialFilters);
+              const filterRef = doc(db, 'projects', selectedProjectName, 'settings', 'filters');
+              const filterSnap = await getDoc(filterRef);
+              if (filterSnap.exists()) {
+                  setFilters(filterSnap.data().value);
+              } else {
+                  setFilters(initialFilters);
+              }
 
-              const { data: groupData } = await supabase.from('user_project_settings').select('setting_value').eq('project_name', selectedProjectName).eq('setting_type', 'visible_groups').single();
-              if (groupData) setVisibleGroups(groupData.setting_value); else setVisibleGroups({});
-          } catch (err) { console.error("Error loading settings:", err); }
+              const groupRef = doc(db, 'projects', selectedProjectName, 'settings', 'visible_groups');
+              const groupSnap = await getDoc(groupRef);
+              if (groupSnap.exists()) {
+                  setVisibleGroups(groupSnap.data().value);
+              } else {
+                  setVisibleGroups({});
+              }
+          } catch (err) { 
+              console.error("Error cargando settings desde Firebase:", err); 
+          }
       };
       loadSettings();
   }, [selectedProjectName, isOfflineMode]);
 
   const saveSettings = async (type: 'filters' | 'visible_groups', value: any) => {
-      if (!selectedProjectName || isOfflineMode) return;
-      try { await supabase.from('user_project_settings').upsert({ project_name: selectedProjectName, setting_type: type, setting_value: value, updated_at: new Date().toISOString() }, { onConflict: 'project_name, setting_type' }); } catch (e) { console.error(e); }
+      if (!selectedProjectName || isOfflineMode || !db) return; // DB CHECK ADDED
+      try { 
+          const settingRef = doc(db, 'projects', selectedProjectName, 'settings', type);
+          await setDoc(settingRef, { value });
+      } catch (e) { 
+          console.error(`Error guardando setting '${type}' en Firebase:`, e);
+      }
   };
 
   const handleSetFilters = (newFilters: FiltersState | ((prev: FiltersState) => FiltersState)) => {
@@ -99,6 +116,7 @@ export default function App() {
           return next;
       });
   };
+  
   const handleSetVisibleGroups = (newGroups: Record<string, boolean>) => {
       setVisibleGroups(newGroups);
       saveSettings('visible_groups', newGroups);
@@ -114,6 +132,8 @@ export default function App() {
   }, [clients]);
 
   const renderContent = () => {
+    if (isLoading) return <div className="flex items-center justify-center h-full text-brand-primary">Cargando datos...</div>;
+
     if (!selectedProjectName || !project) {
         return (
             <div className="flex flex-col items-center justify-center h-full text-brand-text-secondary">
@@ -122,10 +142,15 @@ export default function App() {
             </div>
         );
     }
-    if (isLoading) return <div className="flex items-center justify-center h-full text-brand-primary">Cargando datos...</div>;
+
+    if (!projectRaw) {
+        return <div className="flex items-center justify-center h-full text-brand-primary">Inicializando proyecto...</div>;
+    }
 
     switch (currentView) {
-      case 'general': return <GeneralDataView dsGenerales={projectRaw.ds_generales} projectName={projectRaw.proyecto_nombre} />;
+      case 'general': 
+        if (!projectRaw.ds_generales) return <div className="flex items-center justify-center h-full text-brand-primary">Cargando datos generales...</div>;
+        return <GeneralDataView dsGenerales={projectRaw.ds_generales} projectName={projectRaw.proyecto_nombre} />;
       case 'dashboard': return <DashboardView project={project} filters={filters} setFilters={handleSetFilters} />;
       case 'financial': return <FinancialView project={project} />;
       case 'table': return <ProjectTableView projectData={projectRaw} project={project} clients={clients} filters={filters} setFilters={handleSetFilters} onUnitUpdate={handleUnitUpdate} onBulkUpdate={handleBulkUnitUpdate} visibleGroups={visibleGroups} onVisibleGroupsChange={handleSetVisibleGroups} />;
@@ -140,8 +165,9 @@ export default function App() {
                 <p className="max-w-md">Próximamente: Carga de planos SVG vectoriales e interacción directa con las unidades.</p>
             </div>
         );
-      case 'programmer': // Nueva Vista Programador (Actualizada con más props)
-         return <ProgrammerView projectRaw={projectRaw} project={project} clients={clients} />;
+      case 'programmer':
+        if (!projectRaw.ds_generales) return <div className="flex items-center justify-center h-full text-brand-primary">Cargando datos de programador...</div>;
+        return <ProgrammerView projectRaw={projectRaw} />;
       default: return <div className="p-4 text-white">Vista no encontrada</div>;
     }
   };
